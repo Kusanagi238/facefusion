@@ -124,19 +124,18 @@ def run_peer_loop(session_id : SessionId, rtc_peer : RtcPeer) -> None:
 	temp_vision_frame = video_queue.get()
 
 	if numpy.any(temp_vision_frame):
-		audio_frame = create_empty_audio_frame()
 		temp_resolution : Resolution = (temp_vision_frame.shape[1], temp_vision_frame.shape[0])
 		video_encoder = create_video_encoder(video_codec, temp_resolution)
 		audio_encoder = opus_encoder.create(48000, 2)
+		audio_frame = create_empty_audio_frame()
 		frame_index = 0
 		process_queue : queue.Queue[VisionFrame] = queue.Queue(maxsize = 1)
 		frame_interval = 1.0 / 60
 
 		process_thread = threading.Thread(target = process_video_frames, args = (video_queue, audio_queue, process_queue), daemon = True)
 		process_thread.start()
-		process_queue.put(temp_vision_frame)
 
-		output_vision_frame = process_queue.get()
+		output_vision_frame = temp_vision_frame
 		output_vision_buffer = bytes()
 		output_encode_buffer = bytes()
 
@@ -158,6 +157,9 @@ def run_peer_loop(session_id : SessionId, rtc_peer : RtcPeer) -> None:
 						video_encoder = create_video_encoder(video_codec, temp_resolution)
 						frame_index = 0
 						output_vision_buffer = cv2.cvtColor(output_vision_frame, cv2.COLOR_BGR2YUV_I420).tobytes()
+
+			with contextlib.suppress(queue.Empty):
+				audio_frame = audio_queue.get_nowait()
 
 			if output_vision_buffer:
 				output_encode_buffer = encode_video_frame(video_codec, video_encoder, output_vision_buffer, temp_resolution, frame_index)
