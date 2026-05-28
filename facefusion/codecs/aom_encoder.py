@@ -39,9 +39,8 @@ def encode(aom_encoder : AomEncoder, input_buffer : bytes, frame_resolution : Re
 
 	if aom_library:
 		temp_buffer = ctypes.create_string_buffer(256)
-		encode_buffer = ctypes.create_string_buffer(input_buffer)
 
-		if aom_library.aom_img_wrap(temp_buffer, 0x102, frame_resolution[0], frame_resolution[1], 1, encode_buffer) and aom_library.aom_codec_encode(aom_encoder, temp_buffer, frame_index, 1, 0, 1) == 0:
+		if aom_library.aom_img_wrap(temp_buffer, 0x102, frame_resolution[0], frame_resolution[1], 1, input_buffer) and aom_library.aom_codec_encode(aom_encoder, temp_buffer, frame_index, 1, 0, 1) == 0:
 			output_buffer = collect(aom_encoder)
 
 	return output_buffer
