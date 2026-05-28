@@ -143,8 +143,8 @@ def run_peer_loop(session_id : SessionId, rtc_peer : RtcPeer) -> None:
 			send_timestamp = time.monotonic()
 
 			with contextlib.suppress(queue.Empty):
-				fresh_frame = process_queue.get_nowait()
-				output_vision_frame = fresh_frame
+				next_vision_frame = process_queue.get_nowait()
+				output_vision_frame = next_vision_frame
 
 				if numpy.any(output_vision_frame):
 					output_resolution : Resolution = (output_vision_frame.shape[1], output_vision_frame.shape[0])
