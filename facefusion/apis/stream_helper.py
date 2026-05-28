@@ -129,28 +129,42 @@ def run_peer_loop(session_id : SessionId, rtc_peer : RtcPeer) -> None:
 		video_encoder = create_video_encoder(video_codec, temp_resolution)
 		audio_encoder = opus_encoder.create(48000, 2)
 		frame_index = 0
+		processed_queue : queue.Queue[VisionFrame] = queue.Queue(maxsize = 1)
+		frame_interval = 1.0 / 60
+		running = True
 
-		while numpy.any(temp_vision_frame):
-			with contextlib.suppress(queue.Empty):
-				audio_frame = audio_queue.get_nowait()
+		process_thread = threading.Thread(target = process_video_frames, args = (video_queue, audio_queue, processed_queue), daemon = True)
+		process_thread.start()
+		processed_queue.put(temp_vision_frame)
 
-			output_vision_frame = streamer.process_frame(audio_frame, temp_vision_frame)
-			output_resolution : Resolution = (output_vision_frame.shape[1], output_vision_frame.shape[0])
-			output_vision_buffer = cv2.cvtColor(output_vision_frame, cv2.COLOR_BGR2YUV_I420).tobytes()
+		output_vision_frame = processed_queue.get()
+		cached_video_buffer = bytes()
 
+		while running:
 			send_timestamp = time.monotonic()
 
-			if output_resolution == temp_resolution:
-				output_video_buffer = encode_video_frame(video_codec, video_encoder, output_vision_buffer, temp_resolution, frame_index)
-			else:
-				destroy_video_encoder(video_codec, video_encoder)  # TODO: remove unconditional destroy methods, which have no impact on control flow
-				temp_resolution = output_resolution
-				video_encoder = create_video_encoder(video_codec, temp_resolution)
-				frame_index = 0
-				output_video_buffer = encode_video_frame(video_codec, video_encoder, output_vision_buffer, temp_resolution, frame_index)
+			with contextlib.suppress(queue.Empty):
+				fresh_frame = processed_queue.get_nowait()
 
-			if output_video_buffer:
-				rtc.send_video(rtc_peer, output_video_buffer, int(send_timestamp * 90000))
+				if not numpy.any(fresh_frame):
+					running = False
+					break
+
+				output_vision_frame = fresh_frame
+				output_resolution : Resolution = (output_vision_frame.shape[1], output_vision_frame.shape[0])
+
+				if output_resolution != temp_resolution:
+					destroy_video_encoder(video_codec, video_encoder)
+					temp_resolution = output_resolution
+					video_encoder = create_video_encoder(video_codec, temp_resolution)
+					frame_index = 0
+
+				output_vision_buffer = cv2.cvtColor(output_vision_frame, cv2.COLOR_BGR2YUV_I420).tobytes()
+				cached_video_buffer = encode_video_frame(video_codec, video_encoder, output_vision_buffer, temp_resolution, frame_index)
+				frame_index += 1
+
+			if cached_video_buffer:
+				rtc.send_video(rtc_peer, cached_video_buffer, int(send_timestamp * 90000))
 
 			if audio_encoder and audio_frame.dtype == numpy.float32:
 				output_audio_buffer = opus_encoder.encode(audio_encoder, audio_frame.tobytes(), 960)
@@ -158,16 +172,40 @@ def run_peer_loop(session_id : SessionId, rtc_peer : RtcPeer) -> None:
 				if output_audio_buffer:
 					rtc.send_audio(rtc_peer, output_audio_buffer, int(send_timestamp * 48000))
 
-			frame_index += 1
-			temp_vision_frame = video_queue.get()
+			elapsed = time.monotonic() - send_timestamp
 
-		destroy_video_encoder(video_codec, video_encoder)  # TODO: remove unconditional destroy methods, which have no impact on control flow
+			if elapsed < frame_interval:
+				time.sleep(frame_interval - elapsed)
+
+		destroy_video_encoder(video_codec, video_encoder)
 		opus_encoder.destroy(audio_encoder)
+		process_thread.join()
 
 	for receiver_thread in receiver_threads:
 		receiver_thread.join()
 
 	rtc_store.delete_peers(session_id)
+
+
+def process_video_frames(video_queue : queue.Queue[VisionFrame], audio_queue : queue.Queue[AudioFrame], processed_queue : queue.Queue[VisionFrame]) -> None:
+	audio_frame = create_empty_audio_frame()
+
+	while True:
+		vision_frame = video_queue.get()
+
+		if not numpy.any(vision_frame):
+			processed_queue.put(numpy.empty(0))
+			break
+
+		with contextlib.suppress(queue.Empty):
+			audio_frame = audio_queue.get_nowait()
+
+		output_vision_frame = streamer.process_frame(audio_frame, vision_frame)
+
+		with contextlib.suppress(queue.Empty, queue.Full):
+			processed_queue.get_nowait()
+
+		processed_queue.put(output_vision_frame)
 
 
 def receive_video_frames(video_track : int, video_codec : VideoCodec, video_queue : queue.Queue[VisionFrame]) -> None:
