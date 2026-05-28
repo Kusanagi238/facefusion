@@ -138,6 +138,7 @@ def run_peer_loop(session_id : SessionId, rtc_peer : RtcPeer) -> None:
 		processed_queue.put(temp_vision_frame)
 
 		output_vision_frame = processed_queue.get()
+		cached_yuv_buffer = bytes()
 		cached_video_buffer = bytes()
 
 		while running:
@@ -159,8 +160,10 @@ def run_peer_loop(session_id : SessionId, rtc_peer : RtcPeer) -> None:
 					video_encoder = create_video_encoder(video_codec, temp_resolution)
 					frame_index = 0
 
-				output_vision_buffer = cv2.cvtColor(output_vision_frame, cv2.COLOR_BGR2YUV_I420).tobytes()
-				cached_video_buffer = encode_video_frame(video_codec, video_encoder, output_vision_buffer, temp_resolution, frame_index)
+				cached_yuv_buffer = cv2.cvtColor(output_vision_frame, cv2.COLOR_BGR2YUV_I420).tobytes()
+
+			if cached_yuv_buffer:
+				cached_video_buffer = encode_video_frame(video_codec, video_encoder, cached_yuv_buffer, temp_resolution, frame_index)
 				frame_index += 1
 
 			if cached_video_buffer:
