@@ -11,7 +11,7 @@ import cv2
 import numpy
 from starlette.websockets import WebSocket
 
-from facefusion import rtc, rtc_store, state_manager, streamer
+from facefusion import face_store, rtc, rtc_store, state_manager, streamer
 from facefusion.audio import create_empty_audio_frame
 from facefusion.codecs import aom_decoder, aom_encoder, opus_decoder, opus_encoder, vpx_decoder, vpx_encoder
 from facefusion.libraries import datachannel as datachannel_module
@@ -211,11 +211,25 @@ def run_peer_loop(session_id : SessionId, rtc_peer : RtcPeer) -> None:
 					for ref_line in ref_file:
 						reference_faces.append(ref_line.startswith('face:1'))
 
+		prev_frame_hash : int = 0
+		duplicate_count : int = 0
+
 		while numpy.any(temp_vision_frame):
+			if frame_index > 0 and frame_index % 20 == 0:
+				face_store.clear_static_faces()
 			inference_start = time.monotonic()
 			output_vision_frame = streamer.process_frame(audio_frame, temp_vision_frame)
 			inference_duration = time.monotonic() - inference_start
-			swap_status = numpy.any(output_vision_frame != temp_vision_frame)
+			swap_status = False
+
+			if is_debug:
+				current_frame_hash : int = hash(temp_vision_frame.tobytes())
+
+				if current_frame_hash == prev_frame_hash:
+					duplicate_count += 1
+
+				prev_frame_hash = current_frame_hash
+				swap_status = numpy.any(output_vision_frame != temp_vision_frame)
 
 			if inference_duration > 0:
 				inference_fps = 1.0 / inference_duration
@@ -241,7 +255,7 @@ def run_peer_loop(session_id : SessionId, rtc_peer : RtcPeer) -> None:
 
 				missed = ref_face and swap_status_failed(swap_status)
 				draw_debug_overlay(output_vision_frame, incoming_fps_value[0], inference_fps, outgoing_fps, inference_duration, encode_duration, wait_duration, len(frame_deque), frame_index, temp_resolution, swap_status)
-				log_file.write('[' + datetime.now().strftime('%H:%M:%S.%f')[:12] + '] in:' + str(int(incoming_fps_value[0])) + ' inf:' + str(int(inference_fps)) + ' out:' + str(int(outgoing_fps)) + ' inf_ms:' + str(int(inference_duration * 1000)) + ' enc_ms:' + str(int(encode_duration * 1000)) + ' wait_ms:' + str(int(wait_duration * 1000)) + ' fq:' + str(len(frame_deque)) + ' swap:' + str(int(swap_status)) + ' ref:' + str(ref_index) + ' ref_face:' + str(int(ref_face)) + ' missed:' + str(int(missed)) + ' frame:' + str(frame_index) + ' res:' + str(temp_resolution[0]) + 'x' + str(temp_resolution[1]) + '\n')
+				log_file.write('[' + datetime.now().strftime('%H:%M:%S.%f')[:12] + '] in:' + str(int(incoming_fps_value[0])) + ' inf:' + str(int(inference_fps)) + ' out:' + str(int(outgoing_fps)) + ' inf_ms:' + str(int(inference_duration * 1000)) + ' enc_ms:' + str(int(encode_duration * 1000)) + ' wait_ms:' + str(int(wait_duration * 1000)) + ' fq:' + str(len(frame_deque)) + ' dup:' + str(duplicate_count) + ' swap:' + str(int(swap_status)) + ' ref:' + str(ref_index) + ' ref_face:' + str(int(ref_face)) + ' missed:' + str(int(missed)) + ' frame:' + str(frame_index) + ' res:' + str(temp_resolution[0]) + 'x' + str(temp_resolution[1]) + '\n')
 			output_resolution : Resolution = (output_vision_frame.shape[1], output_vision_frame.shape[0])
 			output_vision_buffer = cv2.cvtColor(output_vision_frame, cv2.COLOR_BGR2YUV_I420).tobytes()
 
@@ -271,6 +285,7 @@ def run_peer_loop(session_id : SessionId, rtc_peer : RtcPeer) -> None:
 			encode_thread.join()
 
 		if log_file:
+			log_file.write('duplicates:' + str(duplicate_count) + ' total:' + str(frame_index) + '\n')
 			log_file.close()
 		destroy_video_encoder(video_codec, video_encoder)  # TODO: remove unconditional destroy methods, which have no impact on control flow
 		opus_encoder.destroy(audio_encoder)
